@@ -1,0 +1,107 @@
+---
+title: "CleanupPBMC"
+output: html_document
+date: "2024-01-03"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(Seurat)
+library(Azimuth)
+library(cowplot)
+library(patchwork)
+library(dplyr)
+library(knitr)
+library(ggplot2)
+library(r2r)
+
+level3Tolevel2 <- read.csv("/Users/sam/Documents/portfolio/scripts/utility/level3Tolevel2.csv")
+my.hm1 <- hashmap()
+my.hm1[level3Tolevel2$level3] <- level3Tolevel2$level2
+
+level2Tolevel1 <- read.csv("/Users/sam/Documents/portfolio/scripts/utility/level2Tolevel1.csv")
+my.hm2 <- hashmap()
+my.hm2[level2Tolevel1$level2] <- level2Tolevel1$level1
+```
+
+```{r RunAzimuthFunction, echo = FALSE}
+RunAzimuthFunction <- function(this.seurat){
+  this.seurat <- RunAzimuth(this.seurat, reference = "pbmcref", verbose = FALSE, n.trees = 50)
+  
+  this.seurat <- subset(this.seurat, subset = predicted.celltype.l1.score >= 0.85)
+  
+  this.seurat$predicted.celltype.l1 <- gsub(" ", "-", this.seurat$predicted.celltype.l1)
+  this.seurat$predicted.celltype.l2 <- gsub(" ", "-", this.seurat$predicted.celltype.l2)
+  this.seurat$predicted.celltype.l3 <- gsub(" ", "-", this.seurat$predicted.celltype.l3)
+  
+  DefaultAssay(this.seurat) <- "RNA"
+  this.seurat <- DietSeurat(this.seurat, assays = "RNA")
+  return(this.seurat)
+}
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+pbmc4k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc4k/filtered_gene_bc_matrices/GRCh38/")
+pbmc4k <- CreateSeuratObject(pbmc4k.data, project = "PBMC4K")
+pbmc8k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc8k/filtered_gene_bc_matrices/GRCh38/")
+pbmc8k <- CreateSeuratObject(pbmc8k.data, project = "PBMC8K")
+pbmc10k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc10k/filtered_feature_bc_matrix/")
+pbmc10k <- CreateSeuratObject(pbmc10k.data, project = "PBMC10K")
+
+pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k), add.cell.ids = c("4K", "8K", "10K"), project = "PBMC")
+
+pbmc
+
+rm(pbmc4k, pbmc4k.data, pbmc8k, pbmc8k.data, pbmc10k, pbmc10k.data)
+```
+
+## Initial Quality Control
+
+```{r qc1, echo=FALSE}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+p1 <- p1 + NoLegend() + ylim(0,100)
+plot(p1)
+
+p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+p1 <- p1 + NoLegend()
+plot(p1)
+
+```
+
+```{r qc2, echo = FALSE}
+pbmc <- subset(pbmc, subset = nFeature_RNA >= 500 & nFeature_RNA <= 4500 & percent.mt <= 10)
+p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+p1 <- p1 + NoLegend() + ylim(0,100)
+plot(p1)
+
+p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+p1 <- p1 + NoLegend()
+plot(p1)
+
+pbmc
+```
+```{r AzimuthChunk, echo = FALSE, warning = FALSE}
+my.obj.list <- SplitObject(pbmc, split.by = "orig.ident")
+
+##rm(pbmc)
+
+my.obj.list <- lapply(X = my.obj.list, FUN = function(x){
+  x <- RunAzimuthFunction(x)
+})
+
+
+
+pbmc <- merge(my.obj.list[[1]], y = my.obj.list[2:length(my.obj.list)], merge.data = TRUE)
+
+rm(my.obj.list)
+
+pbmc
+```
