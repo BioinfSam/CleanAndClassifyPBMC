@@ -2,6 +2,13 @@
 title: "CleanupPBMC"
 output: html_document
 date: "2024-01-03"
+
+params:
+  workingDirectory: "/Users/sam/Documents/portfolio/datasets/single_cell/"
+  outputFile: "cleanedSamples.rds"
+  maxMito: 10
+  minGenes: 500
+  maxGenes: 5000
 ---
 
 ```{r setup, include=FALSE}
@@ -15,93 +22,225 @@ library(knitr)
 library(ggplot2)
 library(r2r)
 
-level3Tolevel2 <- read.csv("/Users/sam/Documents/portfolio/scripts/utility/level3Tolevel2.csv")
-my.hm1 <- hashmap()
-my.hm1[level3Tolevel2$level3] <- level3Tolevel2$level2
-
-level2Tolevel1 <- read.csv("/Users/sam/Documents/portfolio/scripts/utility/level2Tolevel1.csv")
-my.hm2 <- hashmap()
-my.hm2[level2Tolevel1$level2] <- level2Tolevel1$level1
+setwd("/Users/sam/Documents/GitHub/CleanAndClassifyPBMC/docs/")
 ```
 
-```{r RunAzimuthFunction, echo = FALSE}
+## Functions
+
+Functions that are used down the line in this script
+
+A function to run Azimuth and do some cleanup
+```{r RunAzimuth, warning = FALSE, message = FALSE}
+## input is a seurat object
 RunAzimuthFunction <- function(this.seurat){
+  ## run azimuth
   this.seurat <- RunAzimuth(this.seurat, reference = "pbmcref", verbose = FALSE, n.trees = 50)
   
+  ## only keep cells with a high confidence call
   this.seurat <- subset(this.seurat, subset = predicted.celltype.l1.score >= 0.85)
   
+  ## replace spaces in predicted cell types for easier downstream manipulation
   this.seurat$predicted.celltype.l1 <- gsub(" ", "-", this.seurat$predicted.celltype.l1)
   this.seurat$predicted.celltype.l2 <- gsub(" ", "-", this.seurat$predicted.celltype.l2)
   this.seurat$predicted.celltype.l3 <- gsub(" ", "-", this.seurat$predicted.celltype.l3)
   
+  ## we got a high quality cell assignment and now we can trim down the data to save space
+  ## set default assay
   DefaultAssay(this.seurat) <- "RNA"
+  ## run dietseurat and only keep original counts
   this.seurat <- DietSeurat(this.seurat, assays = "RNA")
+  ## return seurat object
   return(this.seurat)
 }
-
 ```
 
-## R Markdown
+A function to compare level assignments from Azimuth per cell
+```{r CompareAzimuthLevels}
+## level3 is "lower" than level2
+## level2 is "lower" than level1
+## level1 is the "highest", "grossest" level
+levelfxn <- function(this.predicted_lower_lvl, this.predicted_higher_lvl) {
+  this.matching_higher_lvl <- query(my.hm, this.predicted_lower_lvl)
+  if(this.matching_higher_lvl == this.predicted_higher_lvl){
+    this.result <- "agree"
+  }
+  else{
+    this.result <- "disagree"
+  }
+  return(this.result)
+}
+```
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+## Building our Seurat object
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+All the datasets are publicly available and were obtained from 10X Genomics
 
-```{r cars}
-pbmc4k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc4k/filtered_gene_bc_matrices/GRCh38/")
+"pbmc4k" and "pbmc8k" are 3' GEX libraries.
+"pbmc10K" is a 5' GEX library and we're going to have some fun with that later.
+
+pbmc4k
+https://www.10xgenomics.com/resources/datasets/4-k-pbm-cs-from-a-healthy-donor-2-standard-2-1-0
+
+pbmc8k
+https://www.10xgenomics.com/resources/datasets/8-k-pbm-cs-from-a-healthy-donor-2-standard-2-1-0
+
+pbmc10k
+https://www.10xgenomics.com/resources/datasets/10-k-human-pbm-cs-5-v-2-0-chromium-x-2-standard-6-1-0
+
+```{r BuildSeuratObject, warning = FALSE}
+## read in public datasets
+pbmc4k.data <- Read10X(paste(params$workingDirectory, "pbmc4k/filtered_gene_bc_matrices/GRCh38/", sep = ""))
+pbmc8k.data <- Read10X(paste(params$workingDirectory, "pbmc8k/filtered_gene_bc_matrices/GRCh38/", sep = ""))
+pbmc10k.data <- Read10X(paste(params$workingDirectory, "pbmc10k/filtered_feature_bc_matrix/", sep = ""))
+
+## create three separate seurat objects
 pbmc4k <- CreateSeuratObject(pbmc4k.data, project = "PBMC4K")
-pbmc8k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc8k/filtered_gene_bc_matrices/GRCh38/")
 pbmc8k <- CreateSeuratObject(pbmc8k.data, project = "PBMC8K")
-pbmc10k.data <- Read10X("/Users/sam/Documents/portfolio/datasets/single_cell/pbmc10k/filtered_feature_bc_matrix/")
 pbmc10k <- CreateSeuratObject(pbmc10k.data, project = "PBMC10K")
 
+## merge seurat objects and give them descriptive names
 pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k), add.cell.ids = c("4K", "8K", "10K"), project = "PBMC")
 
+## give us a summary of the seurat object
 pbmc
 
+## save some space and remove unneeded objects
 rm(pbmc4k, pbmc4k.data, pbmc8k, pbmc8k.data, pbmc10k, pbmc10k.data)
 ```
 
 ## Initial Quality Control
 
-```{r qc1, echo=FALSE}
-pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
-p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
-p1 <- p1 + NoLegend() + ylim(0,100)
-plot(p1)
+Plotting the initial states
 
-p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-p1 <- p1 + NoLegend()
-plot(p1)
+```{r qc1}
+## grab the maximum values for x and y scaling, especially after removing cells
+max.nCount <- max(pbmc$nCount_RNA)
+max.nFeature <- max(pbmc$nFeature_RNA)
+
+## calculate the percent mitochondrial for each cell
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^MT-")
+
+## plot nCount_RNA by percent.mt
+## nCount_RNA is really the number of aligned reads per cell
+pre.nCount_by_perc.mt <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+## set the x and y axis scales
+## remove the legend because we won't need it
+## rotate the x-axis labels so they don't run into each other
+pre.nCount_by_perc.mt <- pre.nCount_by_perc.mt + ylim(0,100) + xlim(0, max.nCount) + NoLegend() + theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+
+## plot nCount_RNA by nFeature_RNA
+## nFeature_RNA is really the number of genes detected per cell
+pre.nCount_by_nFeature <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+## set the x and y axis scales
+## remove the legend because we won't need it
+## rotate the x-axis labels so they don't run into each other
+pre.nCount_by_nFeature <- pre.nCount_by_nFeature + ylim(0, max.nFeature) + xlim(0, max.nCount) + NoLegend() + theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
 
 ```
 
-```{r qc2, echo = FALSE}
-pbmc <- subset(pbmc, subset = nFeature_RNA >= 500 & nFeature_RNA <= 4500 & percent.mt <= 10)
-p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
-p1 <- p1 + NoLegend() + ylim(0,100)
-plot(p1)
+Removing cells based on criteria in "params" section and plotting results
 
-p1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
-p1 <- p1 + NoLegend()
-plot(p1)
+```{r qc2}
+## remove cells based on criteria determined in the setup portion
+pbmc <- subset(pbmc, subset = nFeature_RNA >= params$minGenes & nFeature_RNA <= params$maxGenes & percent.mt <= params$maxMito)
 
+## plot nCount_RNA by nFeature_RNA after cell removal
+after.nCount_by_perc.mt <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+
+## set the x and y axis scales
+## rotate the x-axis labels so they don't run into each other
+after.nCount_by_perc.mt <- after.nCount_by_perc.mt + ylim(0,100) + xlim(0, max.nCount) + theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+
+## plot nCount_RNA by nFeature_RNA
+after.nCount_by_nFeature <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+
+## set the x and y axis scales
+## rotate the x-axis labels so they don't run into each other
+after.nCount_by_nFeature <- after.nCount_by_nFeature + ylim(0, max.nFeature) + xlim(0, max.nCount) + theme(axis.text.x = element_text(angle = 45, vjust = 0.5))
+
+## Now when we combine two images, they'll be side by side
+par(mfrow=c(2,1))
+
+## combine images and plot them
+p <- pre.nCount_by_perc.mt + after.nCount_by_perc.mt
+plot(p)
+
+## combine images and plot them
+p <- pre.nCount_by_nFeature + after.nCount_by_nFeature
+plot(p)
+
+## what up with our object after removing cells?
 pbmc
 ```
-```{r AzimuthChunk, echo = FALSE, warning = FALSE}
+
+## Determining cell types with Azimuth
+
+```{r AzimuthChunk, warning = FALSE, message = FALSE}
+## let's split our seurat object by the original identity because Azimuth can be a 
+## little memory intensive and we can run them separately
 my.obj.list <- SplitObject(pbmc, split.by = "orig.ident")
 
-##rm(pbmc)
+## we can remove the pbmc seurat object after splitting because we don't need it
+rm(pbmc)
 
+## run azimuth and cleanup on each seurat object in our list
 my.obj.list <- lapply(X = my.obj.list, FUN = function(x){
   x <- RunAzimuthFunction(x)
 })
 
-
-
+## let's merge them again into one seurat object for downstream manipulation
 pbmc <- merge(my.obj.list[[1]], y = my.obj.list[2:length(my.obj.list)], merge.data = TRUE)
 
+## don't need this anymore
 rm(my.obj.list)
 
+## what up with our seurat object?
 pbmc
+```
+
+## Making sure Azimuth levels agree
+
+Sometimes a cell will have "incompatible" level assignments.  For instance, 
+a cell's level 1 assignment could be "CD8-T" while the level 2 assignment is 
+"CD4-TEM" and the level 3 assignment is "CD8-TEM_1".  
+
+A "compatible" assignment would be "CD8-T" -> "CD8-TEM" -> "CD8-TEM_1"
+
+```{r processAzimuthLevels}
+## read in the mapping of level3 cell assignments to level2
+level3Tolevel2 <- read.csv("level3Tolevel2.csv")
+## create a new hashmap
+my.hm <- hashmap()
+## add mapped values to hashmap
+my.hm[level3Tolevel2$level3] <- level3Tolevel2$level2
+
+## determine if level 3 and level 2 agree for each cell
+pbmc$level23.agreement <- mapply(levelfxn, pbmc$predicted.celltype.l3, pbmc$predicted.celltype.l2)
+## remove cells for which level 3 and level 2 don't agree
+pbmc <- subset(pbmc, subset = level23.agreement == "agree")
+
+## read in the mapping of level2 cell assignments to level1
+level2Tolevel1 <- read.csv("level2Tolevel1.csv")
+## create a new hashmap
+## could I just add to the same hashmap?  probably
+my.hm <- hashmap()
+## add mapped values to hashmap
+my.hm[level2Tolevel1$level2] <- level2Tolevel1$level1
+
+## determine if level 2 and level 1 agree for each cell
+pbmc$level12.agreement <- mapply(levelfxn, pbmc$predicted.celltype.l2, pbmc$predicted.celltype.l1)
+## only keep cells for which level2 and level1 agree
+pbmc <- subset(pbmc, subset = level12.agreement == "agree")
+```
+
+## Summarize the object and save the data for futher downstream processing and analysis
+
+```{r WriteCleanedData}
+## let's take a look at a summary of the level1 cell types by original sample
+print(kable(table(pbmc$orig.ident, pbmc$predicted.celltype.l1)))
+
+## and let's write the cleaned up object
+saveRDS(pbmc, paste(params$workingDirectory, params$outputFile, sep = ""))
 ```
