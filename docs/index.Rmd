@@ -73,34 +73,45 @@ levelfxn <- function(this.predicted_lower_lvl, this.predicted_higher_lvl) {
 
 A simple function to format TCR and BCR clonotype information before adding to our Seurat object
 ```{r immuneRepertoirePrep, echo = TRUE}
-immuneRepertoirePrepFunction <- function(this.df, this.prefix){
+immuneRepertoirePrepFunction <- function(this.seurat,this.clonotypes,this.columnName){
   
   ## let's just keep high quality, high confidence clonotypes
-  this.df <- subset(this.df, subset = is_cell == "true")
-  this.df <- subset(this.df, subset = high_confidence == "true")
-  this.df <- subset(this.df, subset = full_length == "true")
-  this.df <- subset(this.df, subset = productive == "true")
-  
-  ## reformat cell barcode to make it compatible with our merged Seurat object
-  this.df$barcode <- paste0(this.prefix, "_", this.df$barcode, sep ="")
+  this.clonotypes <- subset(this.clonotypes, subset = is_cell == "true")
+  this.clonotypes <- subset(this.clonotypes, subset = high_confidence == "true")
+  this.clonotypes <- subset(this.clonotypes, subset = full_length == "true")
+  this.clonotypes <- subset(this.clonotypes, subset = productive == "true")
   
   ## get unique barcodes for future use
-  this.rows <- unique(this.df$barcode)
+  this.rows <- unique(this.clonotypes$barcode)
   
   ## generate a new dataframe to return
-  this.toReturn <- as.data.frame(matrix(nrow = length(this.rows), ncol = 1))
-  row.names(this.toReturn) <- this.rows
-  colnames(this.toReturn) <- "clonotypeID"
+  this.meta <- as.data.frame(matrix(nrow = length(this.rows), ncol = 1))
+  row.names(this.meta) <- this.rows
+  colnames(this.meta) <- "clonotypeID"
   
   ## read through our clonotype table and add to the dataframe to return
-  for(i in 1:length(row.names(this.df))){
-    this.barcode <- this.df[i, "barcode"]
-    this.clonotype <- this.df[i, "raw_clonotype_id"]
-    this.toReturn[this.barcode, "clonotypeID"] <- this.clonotype
+  for(i in 1:length(row.names(this.clonotypes))){
+    this.barcode <- this.clonotypes[i, "barcode"]
+    this.clonotype <- this.clonotypes[i, "raw_clonotype_id"]
+    this.meta[this.barcode, "clonotypeID"] <- this.clonotype
   }
   
-  ## return the new dataframe
-  return(this.toReturn)
+  ## add new metadata
+  this.seurat <- AddMetaData(this.seurat, this.meta, this.columnName)
+  ## return the seurat object
+  return(this.seurat)
+}
+```
+
+A function to remove cells that have both a TCR and BCR clonotype assignment
+```{r RemoveDoublePositiveCells}
+RemoveDoublePositiveCellsFunction <- function(this.seurat){
+  
+  this.meta <- this.seurat@meta.data
+  this.meta <- this.meta[!is.na(this.meta$tcrClonotypeID),]
+  this.meta <- this.meta[!is.na(this.meta$bcrClonotypeID),]
+  print(length(row.names(this.meta)))
+  this.seurat <- subset(this.seurat, cells = c(row.names(this.meta)), invert = TRUE)
 }
 ```
 
@@ -131,11 +142,43 @@ pbmc8k.data <- Read10X(paste(params$workingDirectory, "pbmc8k/filtered_gene_bc_m
 pbmc10k.data <- Read10X_h5(paste(params$workingDirectory, "pbmc10k/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_count_raw_feature_bc_matrix.h5", sep = ""))
 pbmc20k.data <- Read10X_h5(paste(params$workingDirectory, "pbmc20k/20k_PBMC_5pv2_HT_nextgem_Chromium_X_Multiplex_count_raw_feature_bc_matrix.h5", sep = ""))
 
-## create three separate seurat objects
+## create separate seurat objects
 pbmc4k <- CreateSeuratObject(pbmc4k.data, project = "PBMC4K")
 pbmc8k <- CreateSeuratObject(pbmc8k.data, project = "PBMC8K")
-pbmc10k <- CreateSeuratObject(pbmc10k.data, project = "PBMC10K")
-pbmc20k <- CreateSeuratObject(pbmc20k.data, project = "PBMC20K")
+pbmc10k <- CreateSeuratObject(pbmc10k.data, project = "PBMC10K", min.features = params$minGenes)
+pbmc20k <- CreateSeuratObject(pbmc20k.data, project = "PBMC20K", min.features = params$minGenes)
+
+```
+
+## Add Clonotype data
+
+The pbmc10k and pbmc20k datasest also have T-cell Receptor (TCR) and B-cell Receptor (BCR) sequencing
+
+We're going to leverage the cell barcodes to match clonotype data to each cell
+
+```{r AddClonotypeData}
+## read in TCR clonotype data
+my.10k.tcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc10k/tcr/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_vdj_t_all_contig_annotations.csv", sep = ""))
+my.10k.bcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc10k/bcr/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_vdj_b_all_contig_annotations.csv", sep = ""))
+
+my.20k.tcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc20k/tcr/20k_PBMC_5pv2_HT_nextgem_Chromium_X_Multiplex_vdj_t_all_contig_annotations.csv", sep = ""))
+my.20k.bcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc20k/bcr/20k_PBMC_5pv2_HT_nextgem_Chromium_X_Multiplex_vdj_b_all_contig_annotations.csv", sep = ""))
+
+## add clonotype information to metadata
+pbmc10k <- immuneRepertoirePrepFunction(pbmc10k, my.10k.tcr.clonotypes, "tcrClonotypeID")
+pbmc10k <- immuneRepertoirePrepFunction(pbmc10k, my.10k.bcr.clonotypes, "bcrClonotypeID")
+pbmc20k <- immuneRepertoirePrepFunction(pbmc20k, my.20k.tcr.clonotypes, "tcrClonotypeID")
+pbmc20k <- immuneRepertoirePrepFunction(pbmc20k, my.20k.bcr.clonotypes, "bcrClonotypeID")
+
+## remove cells that have both a TCR and BCR, which isn't biologically possible
+pbmc10k <- RemoveDoublePositiveCellsFunction(pbmc10k)
+pbmc20k <- RemoveDoublePositiveCellsFunction(pbmc20k)
+
+```
+
+## Merge Our Seurat Objects
+
+```{r MergeObjects}
 
 ## merge seurat objects and give them descriptive names
 pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k, pbmc20k), add.cell.ids = c("4K", "8K", "10K", "20K"), project = "PBMC")
@@ -143,39 +186,6 @@ pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k, pbmc20k), add.cell.ids = c("4K"
 ## save some space and remove unneeded objects
 rm(pbmc4k, pbmc4k.data, pbmc8k, pbmc8k.data, pbmc10k, pbmc10k.data, pbmc20k, pbmc20k.data)
 ```
-
-## Add Clonotype data
-
-The pbmc10k dataset also has T-cell Receptor (TCR) and B-cell Receptor (BCR) sequencing
-
-We're going to leverage the cell barcodes to match clonotype data to each cell
-
-```{r AddClonotypeData}
-## read in TCR clonotype data
-my.10k.tcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc10k/tcr/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_vdj_t_all_contig_annotations.csv", sep = ""))
-
-## reformat to use 'AddMetaData' downstream 
-my.10k.tcr.clonotypes <- immuneRepertoirePrepFunction(my.10k.tcr.clonotypes, "10K")
-
-## same with BCR clonotype data
-my.10k.bcr.clonotypes <- read.csv(paste(params$workingDirectory, "pbmc10k/bcr/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_vdj_b_all_contig_annotations.csv", sep = ""))
-my.10k.bcr.clonotypes <- immuneRepertoirePrepFunction(my.10k.bcr.clonotypes, "10K")
-
-## cells shouldn't have both a TCR and BCR and could represent doublets if they do
-tcr.bcr.barcodes <- intersect(row.names(my.10k.tcr.clonotypes), row.names(my.10k.bcr.clonotypes))
-
-## how many cells have a TCR and BCR sequence?
-length(tcr.bcr.barcodes)
-
-## it's a great excuse to remove those cells
-pbmc <- subset(pbmc, cells = c(tcr.bcr.barcodes), invert = TRUE)
-
-## let's add the TCR and BCR clonotype information to our metadata
-pbmc <- AddMetaData(pbmc, my.10k.tcr.clonotypes, "tcrClonotypeID")
-pbmc <- AddMetaData(pbmc, my.10k.bcr.clonotypes, "bcrClonotypeID")
-
-```
-
 
 
 ## Initial Quality Control
