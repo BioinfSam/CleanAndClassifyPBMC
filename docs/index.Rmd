@@ -12,7 +12,7 @@ params:
   minAzimuthScore: 0.90
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=TRUE, message=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(Seurat)
 library(Azimuth)
@@ -24,6 +24,19 @@ library(ggplot2)
 library(r2r)
 
 ```
+
+## Parameters
+
+Listing parameters definined at the beginning of the rmarkdown document
+
+```{r Parameters, echo = FALSE}
+
+for (name in names(params)) {
+    print(paste(name, params[[name]], sep = " -> "))
+}
+
+```
+
 
 ## Functions
 
@@ -325,4 +338,9 @@ kable(table(pbmc$orig.ident, pbmc$predicted.celltype.l1))
 
 ## and let's write the cleaned up object
 saveRDS(pbmc, paste(params$workingDirectory, params$outputFile, sep = ""))
+```
+
+## Session Info
+```{r SessionInfo, echo = FALSE}
+sessionInfo()
 ```
