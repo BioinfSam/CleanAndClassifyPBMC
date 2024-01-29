@@ -22,8 +22,6 @@ library(dplyr)
 library(knitr)
 library(ggplot2)
 library(r2r)
-library(tximport)
-
 ```
 
 ## Parameters
@@ -58,11 +56,6 @@ RunAzimuthFunction <- function(this.seurat){
   this.seurat$predicted.celltype.l2 <- gsub(" ", "-", this.seurat$predicted.celltype.l2)
   this.seurat$predicted.celltype.l3 <- gsub(" ", "-", this.seurat$predicted.celltype.l3)
   
-  ## we got a high quality cell assignment and now we can trim down the data to save space
-  ## set default assay
-  DefaultAssay(this.seurat) <- "RNA"
-  ## run dietseurat and only keep original counts
-  this.seurat <- DietSeurat(this.seurat, assays = "RNA")
   ## return seurat object
   return(this.seurat)
 }
@@ -297,7 +290,8 @@ my.obj.list <- lapply(X = my.obj.list, FUN = function(x){
 })
 
 ## let's merge them again into one seurat object for downstream manipulation
-pbmc <- merge(my.obj.list[[1]], y = my.obj.list[2:length(my.obj.list)], merge.data = TRUE)
+## because the umap is based on mapping to the same object, pbmcref, we can merge our dimensional reductions too
+pbmc <- merge(my.obj.list[[1]], y = my.obj.list[2:length(my.obj.list)], merge.data = TRUE, merge.dr = TRUE)
 
 ## don't need this anymore
 rm(my.obj.list)
@@ -341,13 +335,38 @@ pbmc$level12.agreement <- mapply(levelfxn, pbmc$predicted.celltype.l2, pbmc$pred
 pbmc <- subset(pbmc, subset = level12.agreement == "agree")
 ```
 
-## Table and Save
+## Summarizing the data
 
-Summarize the cell assigments by Azimuth and save for downstream processing and analysis
+Summarize the cell assigments by Azimuth
 
-```{r WriteCleanedData}
+```{r DataSummary}
+DimPlot(pbmc, group.by = "predicted.celltype.l1", label = TRUE, label.size = 8) + NoLegend() 
+
 ## let's take a look at a summary of the level1 cell types by original sample
 kable(table(pbmc$orig.ident, pbmc$predicted.celltype.l1))
+
+```
+
+## Diet Seurat
+
+Let's remove everthing we don't need from the object.  
+
+'DietSeurat' is perfect for this task, keeping only the RNA assay and saving disk space
+
+```{r DietSeurat}
+
+## we got a high quality cell assignment and now we can trim down the data to save space
+## set default assay
+DefaultAssay(pbmc) <- "RNA"
+## run dietseurat and only keep original counts
+pbmc <- DietSeurat(pbmc, assays = "RNA")
+```
+
+## Save Data
+
+Save data for downstream processing and analysis
+
+```{r WriteCleanedData}
 
 ## and let's write the cleaned up object
 saveRDS(pbmc, paste(params$workingDirectory, params$outputFile, sep = ""))
