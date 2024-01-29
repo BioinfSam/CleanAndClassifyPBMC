@@ -22,6 +22,7 @@ library(dplyr)
 library(knitr)
 library(ggplot2)
 library(r2r)
+library(tximport)
 
 ```
 
@@ -123,7 +124,7 @@ RemoveDoublePositiveCellsFunction <- function(this.seurat){
   this.meta <- this.seurat@meta.data
   this.meta <- this.meta[!is.na(this.meta$tcrClonotypeID),]
   this.meta <- this.meta[!is.na(this.meta$bcrClonotypeID),]
-  print(length(row.names(this.meta)))
+  print(paste(length(row.names(this.meta)), "cells had TCR and BCR sequences"))
   this.seurat <- subset(this.seurat, cells = c(row.names(this.meta)), invert = TRUE)
 }
 ```
@@ -147,6 +148,9 @@ https://www.10xgenomics.com/resources/datasets/10-k-human-pbm-cs-5-v-2-0-chromiu
 pbmc20k  
 https://www.10xgenomics.com/datasets/20-k-human-pbm-cs-5-ht-v-2-0-2-high-6-1-0
 
+pbmcRenal  
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE233315
+
 ```{r BuildSeuratObject, warning = FALSE}
 ## read in public datasets
 pbmc4k.data <- Read10X(paste(params$workingDirectory, "pbmc4k/filtered_gene_bc_matrices/GRCh38/", sep = ""))
@@ -154,13 +158,22 @@ pbmc8k.data <- Read10X(paste(params$workingDirectory, "pbmc8k/filtered_gene_bc_m
 ## a slightly different way to do so
 pbmc10k.data <- Read10X_h5(paste(params$workingDirectory, "pbmc10k/10k_PBMC_5pv2_nextgem_Chromium_X_Multiplex_count_raw_feature_bc_matrix.h5", sep = ""))
 pbmc20k.data <- Read10X_h5(paste(params$workingDirectory, "pbmc20k/20k_PBMC_5pv2_HT_nextgem_Chromium_X_Multiplex_count_raw_feature_bc_matrix.h5", sep = ""))
+pbmcRenal.data <- Read10X(paste(params$workingDirectory, "pbmcRenal/", sep = ""))
+
 
 ## create separate seurat objects
 pbmc4k <- CreateSeuratObject(pbmc4k.data, project = "PBMC4K")
 pbmc8k <- CreateSeuratObject(pbmc8k.data, project = "PBMC8K")
 pbmc10k <- CreateSeuratObject(pbmc10k.data, project = "PBMC10K", min.features = params$minGenes)
 pbmc20k <- CreateSeuratObject(pbmc20k.data, project = "PBMC20K", min.features = params$minGenes)
+pbmcRenal <- CreateSeuratObject(pbmcRenal.data, project = "PBMCRenal", names.delim = "-", names.field = 2)
 
+## From the 'Data processing' portion of the GEO entry
+## "cell barcode appendices: PT is represented by '-1' and NC is represented by '-2'"
+pbmcRenalPatient <- subset(pbmcRenal, idents = "1")
+pbmcRenalPatient@meta.data$orig.ident <- "pbmcRenalPatient"
+pbmcRenalControl <- subset(pbmcRenal, idents = "2")
+pbmcRenalControl@meta.data$orig.ident <- "pbmcRenalControl"
 ```
 
 ## Add Clonotype data
@@ -194,10 +207,10 @@ pbmc20k <- RemoveDoublePositiveCellsFunction(pbmc20k)
 ```{r MergeObjects}
 
 ## merge seurat objects and give them descriptive names
-pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k, pbmc20k), add.cell.ids = c("4K", "8K", "10K", "20K"), project = "PBMC")
+pbmc <- merge(x = pbmc4k, y = c(pbmc8k, pbmc10k, pbmc20k, pbmcRenalPatient, pbmcRenalControl), add.cell.ids = c("4K", "8K", "10K", "20K", "RenalPatient", "RenalControl"), project = "PBMC")
 
 ## save some space and remove unneeded objects
-rm(pbmc4k, pbmc4k.data, pbmc8k, pbmc8k.data, pbmc10k, pbmc10k.data, pbmc20k, pbmc20k.data)
+rm(pbmc4k, pbmc4k.data, pbmc8k, pbmc8k.data, pbmc10k, pbmc10k.data, pbmc20k, pbmc20k.data, pbmcRenalPatient,pbmcRenalControl,pbmcRenal.data, pbmcRenal )
 ```
 
 
